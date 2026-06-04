@@ -1,5 +1,7 @@
 import socket
 
+TURN_TIMEOUT = 45  # seconds a player has to submit a move
+
 class ConnectFour:
     def __init__(self):
         self.board = [
@@ -161,11 +163,14 @@ def main():
 
             broadcast(players, f"BOARD {game.get_board_string()}")
 
-            send_message(active_player["socket"], "YOUR_TURN")
+            send_message(active_player["socket"], f"YOUR_TURN {TURN_TIMEOUT}")
             send_message(waiting_player["socket"], "WAIT_TURN")
 
             try:
+                active_player["socket"].settimeout(TURN_TIMEOUT)
                 move_msg = read_message(active_player["file"])
+                active_player["socket"].settimeout(None)
+
                 if not move_msg:
                     print(f"Player {active_player['client_id']} disconnected.")
                     broadcast(players, "ERR opponent-disconnected")
@@ -176,6 +181,12 @@ def main():
 
                 game.make_move(column)
 
+            except socket.timeout:
+                active_player["socket"].settimeout(None)
+                print(f"Player {active_player['client_id']} timed out.")
+                send_message(active_player["socket"], "OVER FORFEIT timeout")
+                send_message(waiting_player["socket"], f"OVER WIN {waiting_player['client_id']} forfeit")
+                break
             except ValueError as e:
                 send_message(active_player["socket"], f"INVL {str(e)}")
                 continue
