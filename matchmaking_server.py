@@ -92,7 +92,6 @@ def handle_qjoin(player, shared, lock):
 
 def handle_rcreate(player, shared, lock):
     with lock:
-        # keep generating until we find a code not already in use
         code = create_room_code()
         while code in shared["rooms"]:
             code = create_room_code()
@@ -130,7 +129,6 @@ def handle_rjoin(player, code, shared, lock):
 def handle_client(client_socket, client_address, shared, lock):
     client_file = client_socket.makefile("rb")
     try:
-        # --- handshake ---
         message = read_message(client_file)
         if not message:
             client_socket.close()
@@ -145,7 +143,6 @@ def handle_client(client_socket, client_address, shared, lock):
 
         version = parts[1]
 
-        # if the client sends an existing CID, reuse it — otherwise assign a new one
         if len(parts) >= 3:
             client_id = parts[2]
             print(f"Reconnected as {client_id}")
@@ -157,7 +154,6 @@ def handle_client(client_socket, client_address, shared, lock):
 
         send_message(client_socket, f"SESS {version} {client_id}")
 
-        # --- routing ---
         message = read_message(client_file)
         if not message:
             client_socket.close()
@@ -195,7 +191,6 @@ def main():
 
     print(f"Matchmaking Server is listening on port {MATCHMAKING_PORT}")
 
-    # shared state accessed across threads
     shared = {
         "waiting_players": [],
         "rooms": {},

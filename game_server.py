@@ -2,7 +2,7 @@ import socket
 import threading
 import time
 
-TURN_TIMEOUT = 45  # seconds a player has to submit a move
+TURN_TIMEOUT = 45
 
 STATS_SERVER_HOST = "127.0.0.1"
 STATS_SERVER_PORT = 4244
@@ -152,7 +152,6 @@ def run_game(players):
     start_time = time.time()
     move_counts = {player1["client_id"]: 0, player2["client_id"]: 0}
 
-    # result state — updated at each exit point, read in finally
     winner_id = "DRAW"
     outcome = "DRAW"
 
