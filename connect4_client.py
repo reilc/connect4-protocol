@@ -104,8 +104,8 @@ def wait_for_match(matchmaking_file):
             raise ValueError(f"Matchmaking error: {msg}")
 
 
-def connect_random(matchmaking_socket, matchmaking_file, client_id):
-    send_message(matchmaking_socket, f"QJOIN {client_id}")
+def connect_random(matchmaking_socket, matchmaking_file):
+    send_message(matchmaking_socket, "QJOIN")
     return wait_for_match(matchmaking_file)
 
 
@@ -167,7 +167,7 @@ def connect_to_matchmaking():
         choice = get_lobby_choice()
 
         if choice == "1":
-            match_id, host, port = connect_random(matchmaking_socket, matchmaking_file, client_id)
+            match_id, host, port = connect_random(matchmaking_socket, matchmaking_file)
         elif choice == "2":
             match_id, host, port = connect_create_room(matchmaking_socket, matchmaking_file)
         else:

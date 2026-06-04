@@ -167,7 +167,7 @@ def handle_client(client_socket, client_address, shared, lock):
             "client_id": client_id,
         }
 
-        if parts[0] == "QJOIN" and len(parts) == 2:
+        if parts[0] == "QJOIN" and len(parts) == 1:
             handle_qjoin(player, shared, lock)
         elif parts[0] == "RCREATE" and len(parts) == 1:
             handle_rcreate(player, shared, lock)
