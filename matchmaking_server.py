@@ -1,4 +1,5 @@
 import random
+import select
 import socket
 import string
 import threading
@@ -41,6 +42,17 @@ def pair_players(player1, player2, shared):
     return match_id, f"MATCH {match_id} {GAME_SERVER_HOST} {GAME_SERVER_PORT}"
 
 
+def is_socket_alive(sock):
+    """Non-blocking check — safe to call inside a lock."""
+    try:
+        ready = select.select([sock], [], [], 0)[0]
+        if ready:
+            return len(sock.recv(1, socket.MSG_PEEK)) > 0
+        return True
+    except Exception:
+        return False
+
+
 def handle_qjoin(player, shared, lock):
     send_message(player["socket"], "WAIT")
     print(f"{player['client_id']} joined the random queue")
@@ -52,8 +64,24 @@ def handle_qjoin(player, shared, lock):
         if len(shared["waiting_players"]) >= 2:
             player1 = shared["waiting_players"].pop(0)
             player2 = shared["waiting_players"].pop(0)
-            match_id, msg = pair_players(player1, player2, shared)
-            match_message = (player1, player2, msg, match_id)
+
+            p1_alive = is_socket_alive(player1["socket"])
+            p2_alive = is_socket_alive(player2["socket"])
+
+            if not p1_alive:
+                print(f"{player1['client_id']} found disconnected in queue, removing")
+                player1["socket"].close()
+            if not p2_alive:
+                print(f"{player2['client_id']} found disconnected in queue, removing")
+                player2["socket"].close()
+
+            if p1_alive and p2_alive:
+                match_id, msg = pair_players(player1, player2, shared)
+                match_message = (player1, player2, msg, match_id)
+            elif p1_alive:
+                shared["waiting_players"].insert(0, player1)
+            elif p2_alive:
+                shared["waiting_players"].insert(0, player2)
 
     if match_message:
         player1, player2, msg, match_id = match_message
@@ -82,6 +110,13 @@ def handle_rjoin(player, code, shared, lock):
             return
 
         host_player = shared["rooms"].pop(code)
+
+        if not is_socket_alive(host_player["socket"]):
+            print(f"Room {code} host {host_player['client_id']} found disconnected, removing room")
+            host_player["socket"].close()
+            send_message(player["socket"], "INVL room-host-disconnected")
+            return
+
         match_id, msg = pair_players(host_player, player, shared)
         match_message = (host_player, player, msg, match_id)
 
