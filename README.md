@@ -71,22 +71,21 @@ The game ends as soon as one player achieves four discs in a row — horizontall
     +-------------------------------------------------+
     |               Matchmaking Server                |
     +-------------------------------------------------+
-            /                                  \\
+            /                                  \
     Matchmaking Request                Paired match handed
           /                               to game server
-         /                                       \\
+         /                                       \
     +------------------+                   +------------------+     Game results
     |    Game Lobby    |                   |    Game Server   |------------------>
-    | Statistics Server|                   |                  |
-    |  (Player Client) |                   |                  |
-    +------------------+                   +------------------+
-            \\                                  /
+    | (Player Client)  |                   |                  |   +---------------+
+    +------------------+                   +------------------+   | Stats Server  |
+            \                                  /                   +---------------+
            Redirected                         /
           to find opp                       /
-               \\                         /
+               \                         /
                 +-----------------------+
 
-The system follows a sequential lifecycle: players interact with the Game Lobby, which communicates with the Matchmaking Server to find opponents via random queue or room code. Once matched, the Matchmaking Server hands the connection off to a Game Server, which acts as the sole referee for the match. When the game concludes, the Game Server pushes results to the Statistics Server.
+The system follows a sequential lifecycle: players interact with the Game Lobby, which communicates with the Matchmaking Server to find opponents via random queue or room code. Once matched, the Matchmaking Server hands the connection off to a Game Server, which acts as the sole referee for the match. When the game concludes, the Game Server pushes results to the Statistics Server. After stats are displayed, the client is automatically returned to the lobby.
 
 ---
 
@@ -97,19 +96,22 @@ The system follows a sequential lifecycle: players interact with the Game Lobby,
 **Responsibilities:**
 
 * Allow users to join rooms via room code, enter random matchmaking, make moves, and view the board.
+* Display game instructions, board state, and post-game statistics.
+* Return players to the lobby automatically after each game.
 
 **State Stored/Managed:**
 
-* Current username / user ID, current room code, current match ID, local copy of the board, connection status.
+* Current client ID (persisted across games within a session), current room code, current match ID, local copy of the board, connection status.
 
 **Messages:**
 
-* *Sends:* Matchmaking requests, move requests.  
-* *Receives:* Match-found messages, board updates, invalid move responses, game-over messages.
+* *Sends:* `HELO`, `QJOIN`, `RCREATE`, `RJOIN`, `GCON`, move column number, `STATS`.
+* *Receives:* `SESS`, `WAIT`, `ROOM`, `MATCH`, `STRT`, `BOARD`, `YOUR_TURN`, `WAIT_TURN`, `INVL`, `ERR`, `OVER`, `STATS_OK`, `STATS_NONE`.
 
 **Important Logic:**
 
 * The client performs no game logic and does not determine move legality. It only displays state and forwards user actions to the appropriate server.
+* Client IDs are assigned once per session on first connection and reused on subsequent lobby visits.
 
 ---
 
@@ -118,19 +120,23 @@ The system follows a sequential lifecycle: players interact with the Game Lobby,
 **Responsibilities:**
 
 * Pair players together through room code or random queue, then hand them off to a Game Server.
+* Handle multiple concurrent players without blocking.
 
 **State Stored/Managed:**
 
-* Waiting players, active room codes, player connection status, created match IDs.
+* Waiting players (random queue), active room codes and their host player sockets, player connection status, created match IDs, player count, match count.
 
 **Messages:**
 
-* *Sends:* Game start information to the Game Server; room/match details to clients.  
-* *Receives:* Requests to join or create a room; random queue requests.
+* *Sends:* `SESS`, `WAIT`, `ROOM`, `MATCH`, `INVL`.
+* *Receives:* `HELO`, `QJOIN`, `RCREATE`, `RJOIN`.
 
 **Important Logic:**
 
-* Checks for existing rooms, detects when a second player joins, and determines when a match should be created and handed off.
+* Handles each incoming connection in its own thread. Shared state (queue, rooms, counters) is protected by a single threading lock.
+* On random queue pairing, checks both sockets for liveness before sending `MATCH`. Dead sockets are removed; surviving players are re-queued.
+* On room join, checks the host socket for liveness before pairing. If the host has disconnected, the room is removed and the joiner receives `INVL room-host-disconnected`.
+* If a client reconnects with an existing client ID in `HELO`, that ID is reused rather than a new one being assigned.
 
 ---
 
@@ -139,19 +145,24 @@ The system follows a sequential lifecycle: players interact with the Game Lobby,
 **Responsibilities:**
 
 * Run and manage the actual Connect 4 match; serve as the official source of truth for the board.
+* Handle multiple simultaneous games concurrently.
 
 **State Stored/Managed:**
 
-* Board state, player turn, player IDs, match ID, move history, game status.
+* Board state, player turn, player IDs, match ID, move counts per player, game status, start time.
 
 **Messages:**
 
-* *Sends:* Board updates, turn updates, invalid move notices, game-over messages; final results to the Statistics Server.  
-* *Receives:* Player moves from clients.
+* *Sends:* `STRT`, `BOARD`, `YOUR_TURN`, `WAIT_TURN`, `INVL`, `ERR`, `OVER`; `RESULT` to the Statistics Server.
+* *Receives:* `GCON` from clients; `RESULT_OK` from the Statistics Server.
 
 **Important Logic:**
 
-* Validates moves, detects wins and draws, prevents out-of-turn play, manages a server-side turn timer, and handles disconnections.
+* Each game runs in its own thread. Incoming connections are grouped by match ID; a thread is spawned once both players for a given match ID have connected.
+* Validates that both players carry the same match ID before starting.
+* Enforces a server-side 45-second turn timer. Timed-out players forfeit; the waiting player wins.
+* Tracks move counts per player and game duration, reported to the Statistics Server on game end.
+* Disconnects mid-game are detected and the game is abandoned without recording a result.
 
 ---
 
@@ -160,19 +171,23 @@ The system follows a sequential lifecycle: players interact with the Game Lobby,
 **Responsibilities:**
 
 * Store and organize information about completed games.
+* Serve per-player stats to clients on request.
 
 **State Stored/Managed:**
 
-* Player win/loss records, match history, game duration, winner, loser, or draw result.
+* Per-player win/loss/draw counts, match history including outcome, move counts, opponent, and duration. Stored locally as a JSON file (`stats.json`).
 
 **Messages:**
 
-* *Sends:* Player statistics to the lobby/client when requested.  
-* *Receives:* Completed game results from the Game Server.
+* *Sends:* `STATS_OK`, `STATS_NONE`, `RESULT_OK`, `INVL`.
+* *Receives:* `RESULT` from the Game Server; `STATS` from clients.
 
 **Important Logic:**
 
-* Updates player stats after each game. Operates independently from the live game servers. The Game Server queues results for delivery; if the Statistics Server is temporarily unavailable, results are held in the queue and sent once it recovers.
+* On startup, any existing `stats.json` from a previous session is archived to a timestamped file in the `stats_archive/` directory before a fresh file is created.
+* Writes are atomic — results are written to a temporary file and then renamed over the live file, preventing corruption on crash.
+* A threading lock protects the read-modify-write cycle, preventing concurrent game results from overwriting each other.
+* Stats are recorded from each player's individual perspective — their outcome, their move count, and their opponent.
 
 ---
 
@@ -184,27 +199,31 @@ The system follows a sequential lifecycle: players interact with the Game Lobby,
 
 **Client:** A process representing a player in the game (the Game Lobby).
 
-**Session Identifier:** A unique string of non-whitespace ASCII characters (max 80 characters) assigned by the server to identify a client's connection.
+**Client Identifier (CID):** A unique string assigned by the Matchmaking Server to identify a player. Assigned on first connection and reused for the duration of the session.
 
-**Match Identifier:** A unique string of non-whitespace ASCII characters (max 80 characters) identifying a specific game instance.
+**Match Identifier:** A unique string identifying a specific game instance, assigned by the Matchmaking Server.
 
-**Room Code:** A short, human-readable code used to allow two specific players to join a private game.
+**Room Code:** A 6-character uppercase alphabetic code used to allow two specific players to join a private game.
 
 ---
 
 ### **TCP-Based Service**
 
-The Connect 4 protocol is a connection-based application running over TCP. The Matchmaking Server listens on **TCP port 4242**. The Game Server listens on a dynamically assigned port communicated to clients by the Matchmaking Server at match start.
+The Connect 4 protocol is a connection-based application running over TCP. Default ports are:
 
-Once a connection is established, a session is considered active until either the client or server closes it. Either party may initiate message sending in a fully-duplexed fashion.
+| Server | Port |
+|---|---|
+| Matchmaking Server | 4242 |
+| Game Server | 4243 |
+| Statistics Server | 4244 |
 
-A Connect 4 URL is denoted using the scheme `c4tcp:` followed by host and optional port. For example: `c4tcp://localhost` references the Matchmaking Server on the local machine on the default port. `c4tcp://localhost:4243` specifies an alternate port.
+Messages are plain text, terminated by CRLF (`\r\n`). Fields within a message are separated by single spaces. All messages are read using line-based I/O (`readline`) to respect message boundaries.
 
 ---
 
 ### **Session**
 
-A client must establish a session with the Matchmaking Server before any game can begin. The client sends a `HELO` message with the protocol version and a self-chosen client identifier (e.g., a username or UUID). The server responds with a `SESS` message containing the protocol version and a unique session identifier.
+A client establishes a session with the Matchmaking Server by sending `HELO` with the protocol version. On first connection, the server assigns a new client ID and responds with `SESS`. On reconnection (after returning to the lobby), the client includes its existing CID in `HELO`; the server echoes it back unchanged rather than assigning a new one.
 
 ---
 
@@ -212,62 +231,66 @@ A client must establish a session with the Matchmaking Server before any game ca
 
 Once in a session, a client may either:
 
-* **Create a private room** using `CREA`, receiving a room code to share with another player.  
-* **Join a private room** using `JOIN` with a known room code.  
-* **Enter the random queue** using `QJOIN`, which pairs the client with the next available player.
+* **Create a private room** using `RCREATE`, receiving a `ROOM` message with a 6-letter code to share with another player.
+* **Join a private room** using `RJOIN <room-code>`.
+* **Enter the random queue** using `QJOIN`, which pairs the client with the next available player on a first-come, first-served basis.
 
-When two players are paired, the Matchmaking Server notifies both clients of the Game Server address and match ID, then hands the connection off. Clients connect to the Game Server independently using a `GCON` message.
+When two players are paired, the Matchmaking Server sends both a `MATCH` message containing the Game Server address and match ID. Clients then connect directly to the Game Server using `GCON`.
 
 ---
 
 ### **Getting into a Game**
 
-1. Client sends `HELO` to Matchmaking Server → Server responds with `SESS`.  
-2. Client sends `CREA` or `QJOIN` → Server pairs players.  
-3. Server sends `MATCH` (with Game Server address and match ID) to both clients.  
-4. Both clients send `GCON` to the Game Server to begin the match.  
-5. Game Server sends `STRT` to both clients indicating who moves first.
+1. Client sends `HELO` to Matchmaking Server → Server responds with `SESS`.
+2. Client sends `QJOIN`, `RCREATE`, or `RJOIN <code>` → Server pairs players.
+3. Server sends `MATCH` (with Game Server address and match ID) to both clients.
+4. Both clients send `GCON` to the Game Server to begin the match.
+5. Game Server validates that both `GCON` messages carry the same match ID, then sends `STRT` to both clients.
 
 ---
 
 ### **Making a Move**
 
-1. The active player's client sends `MOVE` with the column number (1–7) to the Game Server.  
-2. The Game Server validates the move.  
-3. If valid: the server updates the board and sends a `BORD` message to both clients reflecting the new state, followed by a `YRMV` message indicating the next player's turn.  
-4. If invalid: the server sends an `INVL` message to the offending client; the board state is unchanged.
+1. The Game Server sends `BOARD <board-string>` to both clients, then `YOUR_TURN <timeout>` to the active player and `WAIT_TURN` to the other.
+2. The active player's client sends the column number (1–7) to the Game Server.
+3. The Game Server validates the move.
+4. If valid: the board is updated, move count is incremented, and the loop continues from step 1.
+5. If invalid: the server sends `INVL <reason>` to the active player; the board state is unchanged and the player is prompted again.
 
 ---
 
 ### **Winning and Recording Results**
 
-1. After a successful move, the Game Server checks for a winning condition.  
-2. If four-in-a-row is detected, the server sends a `TERM` message to both clients declaring the winner.  
-3. The Game Server sends a `SAVE` message to the Statistics Server with the match result.  
-4. The Statistics Server responds with `ACKD` once the result is recorded.  
-5. Both clients are sent a `LBYE` message directing them back to the lobby.
+1. After each valid move, the Game Server checks for a win or draw condition.
+2. If the game is over, the server sends a final `BOARD` update followed by `OVER WIN <client-id>` or `OVER DRAW` to both clients.
+3. The Game Server sends a `RESULT` message to the Statistics Server with the match ID, player IDs, winner, outcome, move counts, and duration.
+4. The Statistics Server responds with `RESULT_OK` and saves the result.
+5. The client displays post-game stats retrieved from the Statistics Server, then automatically returns to the lobby.
 
 ---
 
 ### **Turn Timeout**
 
-The Game Server runs a **45-second server-side turn timer** beginning the moment a player's turn starts. If the timer expires before a move is received, the server treats the idle player as having forfeited. The waiting player is awarded the win, a `TERM` message is sent to both clients, and the result is recorded with the Statistics Server.
+The Game Server runs a **45-second server-side turn timer** beginning the moment a player's turn starts. The timeout value is included in the `YOUR_TURN` message so the client can display a countdown. If the timer expires before a move is received:
+
+1. The idle player receives `OVER FORFEIT timeout`.
+2. The waiting player receives `OVER WIN <client-id> forfeit`.
+3. The result is recorded with the Statistics Server with outcome `FORFEIT`.
 
 ---
 
 ### **Crash and Disconnection Handling**
 
-If a client disconnects unexpectedly mid-game (detected via lost TCP connection or missed heartbeat), the Game Server:
+If a client disconnects unexpectedly mid-game (detected via an empty read on the socket), the Game Server:
 
-1. Declares the remaining connected player the winner by default.  
-2. Sends a `TERM` message to the remaining client noting the opponent's disconnection.  
-3. Logs the result (including the disconnect) to the Statistics Server.
+1. Broadcasts `ERR opponent-disconnected` to the remaining client.
+2. Ends the game without recording a result — disconnects are treated as abandoned games.
 
 ---
 
 ## **Message Reference**
 
-Messages consist of a 4-letter ASCII command phrase followed by optional parameters, terminated by CRLF (`\r\n`). Fields are delimited by whitespace (space or tab); multiple whitespace characters are treated as a single delimiter. All command headers are case-insensitive; uppercase is recommended for consistency.
+Messages consist of a command verb followed by optional parameters, terminated by CRLF (`\r\n`). Fields are delimited by single spaces. All command verbs are uppercase.
 
 ---
 
@@ -275,11 +298,10 @@ Messages consist of a 4-letter ASCII command phrase followed by optional paramet
 
 *Client → Matchmaking Server*
 
-Initiates a session. Includes the protocol version and the client's chosen identifier.
+Initiates or resumes a session. On first connect, includes only the protocol version. On reconnect, includes the client's existing CID so the server can reuse it.
 
-`HELO <version> <client-id>`
-
-Example: `HELO 1 alice@example.com`
+`HELO <version>` — first connection  
+`HELO <version> <client-id>` — reconnection
 
 ---
 
@@ -287,21 +309,21 @@ Example: `HELO 1 alice@example.com`
 
 *Matchmaking Server → Client*
 
-Confirms session creation. Includes the agreed protocol version and the server-assigned session identifier.
+Confirms session creation or resumption. Returns the protocol version and the assigned or reused client ID.
 
-`SESS <version> <session-id>`
+`SESS <version> <client-id>`
 
-Example: `SESS 1 0cb8d694-3999-4bc6-8351-0e978b62a08d`
+Example: `SESS 1 CID1`
 
 ---
 
-### **CREA**
+### **RCREATE**
 
 *Client → Matchmaking Server*
 
 Creates a new private room. The server responds with a `ROOM` message containing the generated room code.
 
-`CREA <client-id>`
+`RCREATE`
 
 ---
 
@@ -309,19 +331,21 @@ Creates a new private room. The server responds with a `ROOM` message containing
 
 *Matchmaking Server → Client*
 
-Confirms room creation and provides the room code to share with an opponent.
+Confirms room creation and provides the 6-letter room code to share with an opponent.
 
 `ROOM <room-code>`
 
+Example: `ROOM XKQZBT`
+
 ---
 
-### **JOIN**
+### **RJOIN**
 
 *Client → Matchmaking Server*
 
 Joins a private room by room code.
 
-`JOIN <client-id> <room-code>`
+`RJOIN <room-code>`
 
 ---
 
@@ -329,9 +353,19 @@ Joins a private room by room code.
 
 *Client → Matchmaking Server*
 
-Enters the random matchmaking queue.
+Enters the random matchmaking queue. The client will be paired with the next available player.
 
-`QJOIN <client-id>`
+`QJOIN`
+
+---
+
+### **WAIT**
+
+*Matchmaking Server → Client*
+
+Acknowledges queue or room entry. The client should wait for a `MATCH` message.
+
+`WAIT`
 
 ---
 
@@ -342,6 +376,8 @@ Enters the random matchmaking queue.
 Notifies both matched players of the Game Server address and the match identifier.
 
 `MATCH <match-id> <game-server-ip> <game-server-port>`
+
+Example: `MATCH M1 127.0.0.1 4243`
 
 ---
 
@@ -359,211 +395,250 @@ Announces the client's presence on the Game Server to begin a matched game.
 
 *Game Server → Client*
 
-Signals the start of the match. Identifies which player moves first (Red) and which is second (Yellow).
+Signals the start of the match. Identifies which player is Red (moves first) and which is Yellow.
 
 `STRT <match-id> <red-client-id> <yellow-client-id>`
 
 ---
 
-### **MOVE**
-
-*Client → Game Server*
-
-Submits a move. The column parameter is an integer from 1 (leftmost) to 7 (rightmost).
-
-`MOVE <match-id> <client-id> <column>`
-
----
-
-### **BORD**
-
-*Game Server → Client*
-
-Broadcasts the current board state. The board is represented as a 42-character linear string, read left-to-right, top-to-bottom, where `R` \= Red, `Y` \= Yellow, and `*` \= empty.
-
-`BORD <match-id> <red-client-id> <yellow-client-id> <next-to-move-client-id> |<board-string>|`
-
-Example: `BORD M1 CID1 CID2 CID2 |*|*|*|*|*|*|*|...|R|...|`
-
----
-
-### **YRMV**
+### **BOARD**
 
 *Game Server → All Clients*
 
-Notifies all clients whose turn it is. The Game Server will not accept `MOVE` commands from any client other than the one named here.
+Broadcasts the current board state. The board is a 42-character string read left-to-right, top-to-bottom: `R` = Red, `Y` = Yellow, `*` = empty.
 
-`YRMV <match-id> <client-id>`
+`BOARD <board-string>`
+
+Example: `BOARD **************R*****************************`
+
+---
+
+### **YOUR_TURN**
+
+*Game Server → Active Client*
+
+Notifies the active player it is their turn and provides the turn time limit in seconds.
+
+`YOUR_TURN <timeout-seconds>`
+
+Example: `YOUR_TURN 45`
+
+---
+
+### **WAIT_TURN**
+
+*Game Server → Waiting Client*
+
+Notifies the waiting player that their opponent is making a move.
+
+`WAIT_TURN`
 
 ---
 
 ### **INVL**
 
-*Game Server → Client*
+*Game Server or Matchmaking Server → Client*
 
-Notifies the active player that their submitted move was illegal. The board state is unchanged.
+Notifies the client that their last action was invalid. Includes a machine-readable reason code.
 
-`INVL <match-id> <reason>`
+`INVL <reason>`
+
+Reason codes:
+
+| Reason | Source | Meaning |
+|---|---|---|
+| `past-column-limits` | Game Server | Column number out of range |
+| `column-is-full` | Game Server | Chosen column has no empty slots |
+| `bad-gcon` | Game Server | Malformed GCON message |
+| `wrong-match-id` | Game Server | Match ID does not match expected |
+| `unknown-room-code` | Matchmaking Server | Room code does not exist |
+| `room-host-disconnected` | Matchmaking Server | Room host left before match started |
+| `expected-helo` | Matchmaking Server | Expected HELO as first message |
+| `expected-qjoin-rcreate-rjoin` | Matchmaking Server | Unrecognised routing message |
 
 ---
 
-### **TERM**
+### **OVER**
 
 *Game Server → All Clients*
 
-Signals game over. Includes the match ID and the winning client's ID. For draws, no client ID is sent. For forfeits or disconnects, a reason string follows.
+Signals game over. Format varies by outcome.
 
-`TERM <match-id> [<winner-client-id>] [<reason>] KTHXBYE`
-
-Examples:
-
-* Win: `TERM M1 CID1 KTHXBYE`  
-* Draw: `TERM M1 KTHXBYE`  
-* Forfeit: `TERM M1 CID1 DISCONNECT KTHXBYE`
+`OVER WIN <winner-client-id>` — normal win  
+`OVER WIN <winner-client-id> forfeit` — win by opponent timeout  
+`OVER DRAW` — board full with no winner  
+`OVER FORFEIT timeout` — sent to the player who timed out
 
 ---
 
-### **SAVE**
+### **ERR**
+
+*Game Server → All Clients*
+
+Signals an unrecoverable game error. The game is ended.
+
+`ERR <reason>`
+
+Example: `ERR opponent-disconnected`
+
+---
+
+### **RESULT**
 
 *Game Server → Statistics Server*
 
 Sends a completed match result for storage.
 
-`SAVE <match-id> <winner-client-id|DRAW> <loser-client-id|DRAW> <duration-seconds> <reason>`
+`RESULT <match-id> <p1-client-id> <p2-client-id> <winner-client-id|DRAW> <outcome> <p1-moves> <p2-moves> <duration-seconds>`
+
+Example: `RESULT M1 CID1 CID2 CID1 WIN 12 9 47`
 
 ---
 
-### **ACKD**
+### **RESULT_OK**
 
 *Statistics Server → Game Server*
 
 Confirms a result was successfully stored.
 
-`ACKD <match-id>`
+`RESULT_OK`
 
 ---
 
-### **LBYE**
-
-*Game Server → Client*
-
-Directs the client back to the lobby after a game concludes.
-
-`LBYE <match-id>`
-
----
-
-### **GDBY**
-
-*Client or Server → Counterpart*
-
-Signals the sender is closing the session. If sent by a client currently in a game, it implicitly forfeits that game.
-
-`GDBY`
-
----
-
-### **STAT**
-
-*Client → Game Server*
-
-Requests the current status of a game.
-
-`STAT <match-id>`
-
----
-
-### **LIST**
+### **STATS**
 
 *Client → Statistics Server*
 
-Requests player statistics. With `PLAYER <client-id>`, returns stats for a specific player. With `ALL`, returns all stored records.
+Requests statistics for a specific player.
 
-`LIST PLAYER <client-id>` or `LIST ALL`
+`STATS <client-id>`
+
+---
+
+### **STATS_OK**
+
+*Statistics Server → Client*
+
+Returns the player's statistics as a JSON payload on a single line.
+
+`STATS_OK <json>`
+
+---
+
+### **STATS_NONE**
+
+*Statistics Server → Client*
+
+Indicates the requested player has no recorded history yet.
+
+`STATS_NONE`
 
 ---
 
 ### **Client-Sent Messages**
 
 | Message | Destination |
-| ----- | ----- |
+|---|---|
 | `HELO` | Matchmaking Server |
-| `CREA` | Matchmaking Server |
-| `JOIN` | Matchmaking Server |
+| `RCREATE` | Matchmaking Server |
+| `RJOIN` | Matchmaking Server |
 | `QJOIN` | Matchmaking Server |
 | `GCON` | Game Server |
-| `MOVE` | Game Server |
-| `STAT` | Game Server |
-| `LIST` | Statistics Server |
-| `GDBY` | Matchmaking / Game Server |
+| `<column-number>` | Game Server |
+| `STATS` | Statistics Server |
 
 ### **Server-Sent Messages**
 
 | Message | Sender |
-| ----- | ----- |
+|---|---|
 | `SESS` | Matchmaking Server |
+| `WAIT` | Matchmaking Server |
 | `ROOM` | Matchmaking Server |
 | `MATCH` | Matchmaking Server |
 | `STRT` | Game Server |
-| `BORD` | Game Server |
-| `YRMV` | Game Server |
-| `INVL` | Game Server |
-| `TERM` | Game Server |
-| `LBYE` | Game Server |
-| `SAVE` | Game Server |
-| `ACKD` | Statistics Server |
-| `GDBY` | Any |
+| `BOARD` | Game Server |
+| `YOUR_TURN` | Game Server |
+| `WAIT_TURN` | Game Server |
+| `INVL` | Game Server / Matchmaking Server |
+| `ERR` | Game Server |
+| `OVER` | Game Server |
+| `RESULT` | Game Server |
+| `RESULT_OK` | Statistics Server |
+| `STATS_OK` | Statistics Server |
+| `STATS_NONE` | Statistics Server |
 
 ---
 
 ## **Communication Scenarios**
 
-### **Scenario 1: Getting into a Game**
+### **Scenario 1: Getting into a Game (Random Queue)**
 
-    Client (Lobby)      Matchmaking Server         Game Server
-      |                      |                       |
-      |-- HELO 1 CID1 ----->|                       |
-      |<-- SESS 1 SID1 -----|                       |
-      |                      |                       |
-      |-- QJOIN CID1 ------>|                       |
-      |                      | (waits for opponent) |
-      |                      |                       |
-      |<-- MATCH M1 IP:P ---|                       |
-      |                      |                       |
-      |-- GCON M1 CID1 --------------------------->|
-      |                      |                       |
-      |<-- STRT M1 CID1 CID2 ---------------------|
+    Client (Lobby)        Matchmaking Server         Game Server
+      |                         |                        |
+      |-- HELO 1 -------------->|                        |
+      |<-- SESS 1 CID1 ---------|                        |
+      |                         |                        |
+      |-- QJOIN --------------->|                        |
+      |<-- WAIT ----------------|                        |
+      |                         | (waits for opponent)   |
+      |<-- MATCH M1 127.0.0.1 4243 ---|                  |
+      |                         |                        |
+      |-- GCON M1 CID1 --------------------------------->|
+      |<-- STRT M1 CID1 CID2 ----------------------------|
 
-### **Scenario 2: Making a Move**
+### **Scenario 2: Getting into a Game (Private Room)**
 
-    Player 1 (Client)       Game Server       Player 2 (Client)
-        |                     |                    |
-        |-- MOVE M1 CID1 3 ->|                    |
-        |                     | [Server validates] |
-        |<-- BORD M1 ... ----|-- BORD M1 ... ---->|
-        |<-- YRMV M1 CID2 ---|-- YRMV M1 CID2 -->|
+    Client A (Lobby)      Matchmaking Server       Client B (Lobby)
+      |                         |                        |
+      |-- HELO 1 -------------->|                        |
+      |<-- SESS 1 CID1 ---------|                        |
+      |-- RCREATE ------------->|                        |
+      |<-- ROOM XKQZBT ---------|                        |
+      |                         |<------- HELO 1 --------|
+      |                         |--- SESS 1 CID2 ------->|
+      |                         |<------- RJOIN XKQZBT --|
+      |<-- MATCH M1 ... --------|--- MATCH M1 ... ------>|
 
-### **Scenario 3: Winning and Saving Results**
+### **Scenario 3: Making a Move**
+
+    Player 1 (Client)         Game Server         Player 2 (Client)
+        |                         |                      |
+        |<-- BOARD ************.. |-- BOARD ************.|
+        |<-- YOUR_TURN 45 --------|-- WAIT_TURN -------->|
+        |                         |                      |
+        |-- 3 ------------------->|                      |
+        |                         | [Server validates]   |
+        |<-- BOARD *****R******.. |-- BOARD *****R***..->|
+
+### **Scenario 4: Winning and Recording Results**
 
     Client              Game Server          Statistics Server
      |                      |                       |
-     |<-- TERM M1 CID1 -----|                       |
-     |                      |-- SAVE M1 CID1 ----->|
-     |                      |<-- ACKD M1 ----------|
-     |<-- LBYE M1 ----------|                       |
+     |<-- BOARD ... --------|                       |
+     |<-- OVER WIN CID1 ----|-- OVER WIN CID1 ----->|
+     |                      |                       |
+     |                      |-- RESULT M1 CID1 ... >|
+     |                      |<-- RESULT_OK ----------|
 
-        
+### **Scenario 5: Turn Timeout**
 
-### **Scenario 4: Handling a Disconnect**
+    Active Player         Game Server         Waiting Player
+        |                     |                     |
+        |<-- YOUR_TURN 45 ----|-- WAIT_TURN ------->|
+        |                     |                     |
+        |    [45s elapsed]    |                     |
+        |                     |                     |
+        |<-- OVER FORFEIT ... |-- OVER WIN CID2 ... >|
 
-    Client (Player A)      Game Server       Statistics Server
-        |                     |                    |
-        |                     | [P2 connection lost]
-        |<-- TERM M1 CID1 DISCONNECT KTHXBYE ----|
-        |                     |                    |
-        |                     |-- SAVE M1 CID1 DISCONNECT -->|
-        |                     |<-- ACKD M1 --------|
-        |<-- LBYE M1 --------|                    |
+### **Scenario 6: Reconnecting to Lobby**
+
+    Client (Lobby)        Matchmaking Server
+      |                         |
+      | [game just ended]       |
+      |                         |
+      |-- HELO 1 CID1 --------->|   (sends existing CID)
+      |<-- SESS 1 CID1 ---------|   (server reuses it)
+      |-- QJOIN --------------->|
 
 ---
 
@@ -575,15 +650,23 @@ If players are already in a game, they will not notice any disruption. New playe
 
 ### **Game Server Crash**
 
-The active game is lost. Clients receive a `TERM` message indicating server failure and are redirected back to the lobby. The result may not be fully recorded.
+The active game is lost. Clients are disconnected and returned to the lobby on their next action. The result is not recorded.
 
-### **Statistics Server Crash**
+### **Statistics Server Crash or Unavailability**
 
-The Game Server queues results locally. Once the Statistics Server comes back online, the Game Server retries delivery of all queued results in order.
+The Game Server attempts to report the result once after the game ends. If the Statistics Server is unreachable, the failure is logged and the game ends normally for the players. Stats for that game will not be recorded.
 
 ### **Slow or Missing Messages**
 
 The Game Server enforces a **45-second turn timer**. If no move is received before the timer expires, the idle player forfeits, the waiting player is awarded the win, and the result is sent to the Statistics Server.
+
+### **Player Disconnects Mid-Game**
+
+Detected via an empty read on the socket. The game is ended and `ERR opponent-disconnected` is sent to the remaining player. The result is not recorded since the game was not completed legitimately.
+
+### **Dead Socket in Matchmaking Queue or Room**
+
+Detected at the point of pairing using a non-blocking socket check. Dead players are silently removed from the queue or room. Surviving queue players are re-queued; surviving room joiners receive `INVL room-host-disconnected`.
 
 ---
 
@@ -592,4 +675,3 @@ The Game Server enforces a **45-second turn timer**. If no move is received befo
 * Milton Bradley, *Connect Four* (1974). Hasbro.  
 * [Wikipedia: Connect Four](https://en.wikipedia.org/wiki/Connect_Four)  
 * INFO314 Tic-Tac-Toe RFC Reference Implementation: [https://github.com/info314-26sp/tic-tac-toe](https://github.com/info314-26sp/tic-tac-toe)
-
