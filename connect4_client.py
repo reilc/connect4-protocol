@@ -1,9 +1,13 @@
+import json
 import socket
 
 MATCHMAKING_HOST = "127.0.0.1"
 # MATCHMAKING_HOST = "10.18.33.24"
 MATCHMAKING_PORT = 4242
 PROTOCOL_VERSION = "1"
+
+STATS_SERVER_HOST = "127.0.0.1"
+STATS_SERVER_PORT = 4244
 
 BOARD_ROWS = 6
 BOARD_COLS = 7
@@ -45,6 +49,55 @@ def render_board(board_string):
             line += spot + "|"
         print(line)
     print(" +-+-+-+-+-+-+-+\n")
+
+
+def fetch_and_display_stats(client_id):
+    try:
+        stats_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        stats_socket.connect((STATS_SERVER_HOST, STATS_SERVER_PORT))
+        stats_file = stats_socket.makefile("rb")
+
+        send_message(stats_socket, f"STATS {client_id}")
+        response = read_message(stats_file)
+
+        stats_file.close()
+        stats_socket.close()
+
+        if response is None or response == "STATS_NONE":
+            print("\nNo stats on record yet.")
+            return
+
+        parts = response.split(" ", 1)
+        if parts[0] != "STATS_OK" or len(parts) < 2:
+            print("\nCould not retrieve stats.")
+            return
+
+        data = json.loads(parts[1])
+        matches = data.get("matches", [])
+        last = matches[-1] if matches else None
+
+        print("\n╔══════════════════════════════╗")
+        print(f"  Stats for {client_id}")
+        print( "╠══════════════════════════════╣")
+        print(f"  Wins:   {data.get('wins', 0)}")
+        print(f"  Losses: {data.get('losses', 0)}")
+        print(f"  Draws:  {data.get('draws', 0)}")
+        print(f"  Games played: {len(matches)}")
+
+        if last:
+            print("╠══════════════════════════════╣")
+            print("  Last match:")
+            print(f"    Match ID:  {last.get('match_id', '?')}")
+            print(f"    Opponent:  {last.get('opponent', '?')}")
+            print(f"    Outcome:   {last.get('outcome', '?')}")
+            print(f"    Your moves:      {last.get('moves', '?')}")
+            print(f"    Opponent moves:  {last.get('opponent_moves', '?')}")
+            print(f"    Duration:  {last.get('duration', '?')}s")
+
+        print("╚══════════════════════════════╝\n")
+
+    except Exception as e:
+        print(f"\nCould not retrieve stats: {e}\n")
 
 
 # ---------------------------------------------------------------------------
@@ -267,13 +320,21 @@ def play_game(client_id, match_id, game_server_host, game_server_port):
 # ---------------------------------------------------------------------------
 
 def main():
-    try:
-        client_id, match_id, host, port = connect_to_matchmaking()
-        play_game(client_id, match_id, host, port)
-    except ConnectionRefusedError:
-        print("Could not connect. Make sure the servers are running first.")
-    except Exception as e:
-        print(f"Error: {e}")
+    print("Welcome to Connect 4!")
+    while True:
+        try:
+            client_id, match_id, host, port = connect_to_matchmaking()
+            play_game(client_id, match_id, host, port)
+            fetch_and_display_stats(client_id)
+        except ConnectionRefusedError:
+            print("Could not connect. Make sure the servers are running first.")
+            break
+        except KeyboardInterrupt:
+            print("\nGoodbye!")
+            break
+        except Exception as e:
+            print(f"Error: {e}")
+            break
 
 
 if __name__ == "__main__":
