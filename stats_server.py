@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 HOST = "0.0.0.0"
 STATS_PORT = 4244
 STATS_FILE = "stats.json"
+STATS_ARCHIVE_DIR = "stats_archive"
 
 
 # ---------------------------------------------------------------------------
@@ -174,10 +175,28 @@ def handle_connection(client_socket, client_address, file_lock):
 
 
 # ---------------------------------------------------------------------------
+# startup
+# ---------------------------------------------------------------------------
+
+def archive_stats():
+    """If a stats file exists from a previous session, move it to the archive folder."""
+    if not os.path.exists(STATS_FILE):
+        return
+
+    os.makedirs(STATS_ARCHIVE_DIR, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    archive_path = os.path.join(STATS_ARCHIVE_DIR, f"stats_{timestamp}.json")
+    os.rename(STATS_FILE, archive_path)
+    print(f"Archived previous stats to: {archive_path}")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
 def main():
+    archive_stats()
+
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_socket.bind((HOST, STATS_PORT))
