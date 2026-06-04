@@ -2,7 +2,7 @@ import socket
 import threading
 import time
 
-TURN_TIMEOUT = 45
+TURN_TIMEOUT = 45  # seconds a player has to submit a move
 
 STATS_SERVER_HOST = "127.0.0.1"
 STATS_SERVER_PORT = 4244
@@ -152,6 +152,7 @@ def run_game(players):
     start_time = time.time()
     move_counts = {player1["client_id"]: 0, player2["client_id"]: 0}
 
+    # result state — updated at each exit point, read in finally
     winner_id = "DRAW"
     outcome = "DRAW"
 
@@ -179,9 +180,26 @@ def run_game(players):
                     outcome = None
                     break
 
-                print(f"[{match_id}] {active_player['client_id']} chose column: {move_msg}")
-                column = int(move_msg)
+                print(f"[{match_id}] {active_player['client_id']} sent: {move_msg}")
 
+                parts = move_msg.split()
+                if len(parts) != 4 or parts[0] != "MOVE":
+                    send_message(active_player["socket"], "INVL bad-move-format")
+                    continue
+
+                move_match_id = parts[1]
+                move_client_id = parts[2]
+                move_column = parts[3]
+
+                if move_match_id != match_id:
+                    send_message(active_player["socket"], "INVL wrong-match-id")
+                    continue
+
+                if move_client_id != active_player["client_id"]:
+                    send_message(active_player["socket"], "INVL wrong-client-id")
+                    continue
+
+                column = int(move_column)
                 game.make_move(column)
                 move_counts[active_player["client_id"]] += 1
 

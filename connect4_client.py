@@ -240,7 +240,7 @@ def connect_to_matchmaking(existing_client_id=None):
 # gameplay
 # ---------------------------------------------------------------------------
 
-def get_move():
+def get_move(match_id, client_id):
     while True:
         raw = input("Choose a column (1-7): ").strip()
         if not raw.isdigit():
@@ -250,7 +250,7 @@ def get_move():
         if col < 1 or col > 7:
             print("Column must be between 1 and 7.")
             continue
-        return str(col)
+        return f"MOVE {match_id} {client_id} {col}"
 
 
 def play_game(client_id, match_id, game_server_host, game_server_port):
@@ -281,7 +281,7 @@ def play_game(client_id, match_id, game_server_host, game_server_port):
             elif verb == "YOUR_TURN":
                 timeout = parts[1] if len(parts) > 1 else "?"
                 print(f"Your turn! You have {timeout} seconds.")
-                move = get_move()
+                move = get_move(match_id, client_id)
                 send_message(game_socket, move)
 
             elif verb == "WAIT_TURN":
@@ -290,7 +290,7 @@ def play_game(client_id, match_id, game_server_host, game_server_port):
             elif verb == "INVL":
                 reason = parts[1] if len(parts) > 1 else "unknown"
                 print(f"Invalid move ({reason}). Try again.")
-                move = get_move()
+                move = get_move(match_id, client_id)
                 send_message(game_socket, move)
 
             elif verb == "ERR":
