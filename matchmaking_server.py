@@ -145,12 +145,17 @@ def handle_client(client_socket, client_address, shared, lock):
 
         version = parts[1]
 
-        with lock:
-            client_id = create_client_id(shared["player_count"])
-            shared["player_count"] += 1
+        # if the client sends an existing CID, reuse it — otherwise assign a new one
+        if len(parts) >= 3:
+            client_id = parts[2]
+            print(f"Reconnected as {client_id}")
+        else:
+            with lock:
+                client_id = create_client_id(shared["player_count"])
+                shared["player_count"] += 1
+            print(f"Assigned {client_id}")
 
         send_message(client_socket, f"SESS {version} {client_id}")
-        print(f"Assigned {client_id}")
 
         # --- routing ---
         message = read_message(client_file)

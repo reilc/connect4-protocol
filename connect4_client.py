@@ -124,8 +124,11 @@ def get_lobby_choice():
 # matchmaking
 # ---------------------------------------------------------------------------
 
-def handshake(matchmaking_socket, matchmaking_file):
-    send_message(matchmaking_socket, f"HELO {PROTOCOL_VERSION}")
+def handshake(matchmaking_socket, matchmaking_file, existing_client_id=None):
+    if existing_client_id:
+        send_message(matchmaking_socket, f"HELO {PROTOCOL_VERSION} {existing_client_id}")
+    else:
+        send_message(matchmaking_socket, f"HELO {PROTOCOL_VERSION}")
 
     sess_msg = read_message(matchmaking_file)
     if sess_msg is None:
@@ -210,13 +213,13 @@ def connect_join_room(matchmaking_socket, matchmaking_file):
             raise ValueError(f"Unexpected message: {msg}")
 
 
-def connect_to_matchmaking():
+def connect_to_matchmaking(existing_client_id=None):
     matchmaking_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     matchmaking_socket.connect((MATCHMAKING_HOST, MATCHMAKING_PORT))
     matchmaking_file = matchmaking_socket.makefile("rb")
 
     try:
-        client_id = handshake(matchmaking_socket, matchmaking_file)
+        client_id = handshake(matchmaking_socket, matchmaking_file, existing_client_id)
         choice = get_lobby_choice()
 
         if choice == "1":
@@ -321,9 +324,10 @@ def play_game(client_id, match_id, game_server_host, game_server_port):
 
 def main():
     print("Welcome to Connect 4!")
+    client_id = None
     while True:
         try:
-            client_id, match_id, host, port = connect_to_matchmaking()
+            client_id, match_id, host, port = connect_to_matchmaking(client_id)
             play_game(client_id, match_id, host, port)
             fetch_and_display_stats(client_id)
         except ConnectionRefusedError:
