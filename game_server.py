@@ -116,6 +116,7 @@ def main():
     print(f"Game Server is listening on port {port}")
 
     players = []
+    expected_match_id = None
 
     while len(players) < 2:
         client_socket, client_address = server_socket.accept()
@@ -131,6 +132,14 @@ def main():
                 match_id = parts[1]
                 client_id = parts[2]
 
+                if expected_match_id is None:
+                    expected_match_id = match_id
+                elif match_id != expected_match_id:
+                    print(f"Rejected {client_id}: match ID {match_id} does not match expected {expected_match_id}")
+                    send_message(client_socket, f"INVL wrong-match-id")
+                    client_socket.close()
+                    continue
+
                 players.append({
                     "socket": client_socket,
                     "file": client_file,
@@ -144,6 +153,8 @@ def main():
         except Exception as e:
             print(f"Error handling connection: {e}")
             client_socket.close()
+
+    assert players[0]["match_id"] == players[1]["match_id"], "Match ID mismatch — players should not have been paired"
 
     game = ConnectFour()
 
