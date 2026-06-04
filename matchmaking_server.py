@@ -1,4 +1,6 @@
+import random
 import socket
+import string
 import threading
 
 HOST = "0.0.0.0"
@@ -28,6 +30,68 @@ def create_match_id(match_num):
     return f"M{match_num}"
 
 
+def create_room_code():
+    return "".join(random.choices(string.ascii_uppercase, k=6))
+
+
+def pair_players(player1, player2, shared):
+    """Assign a match ID and return the MATCH message string. Caller must hold the lock."""
+    match_id = create_match_id(shared["match_count"])
+    shared["match_count"] += 1
+    return match_id, f"MATCH {match_id} {GAME_SERVER_HOST} {GAME_SERVER_PORT}"
+
+
+def handle_qjoin(player, shared, lock):
+    send_message(player["socket"], "WAIT")
+    print(f"{player['client_id']} joined the random queue")
+
+    match_message = None
+    with lock:
+        shared["waiting_players"].append(player)
+
+        if len(shared["waiting_players"]) >= 2:
+            player1 = shared["waiting_players"].pop(0)
+            player2 = shared["waiting_players"].pop(0)
+            match_id, msg = pair_players(player1, player2, shared)
+            match_message = (player1, player2, msg, match_id)
+
+    if match_message:
+        player1, player2, msg, match_id = match_message
+        send_message(player1["socket"], msg)
+        send_message(player2["socket"], msg)
+        print(f"Matched {player1['client_id']} and {player2['client_id']} into {match_id}")
+
+
+def handle_rcreate(player, shared, lock):
+    with lock:
+        # keep generating until we find a code not already in use
+        code = create_room_code()
+        while code in shared["rooms"]:
+            code = create_room_code()
+        shared["rooms"][code] = player
+
+    send_message(player["socket"], f"ROOM {code}")
+    print(f"{player['client_id']} created room {code}")
+
+
+def handle_rjoin(player, code, shared, lock):
+    match_message = None
+    with lock:
+        if code not in shared["rooms"]:
+            send_message(player["socket"], "INVL unknown-room-code")
+            return
+
+        host_player = shared["rooms"].pop(code)
+        match_id, msg = pair_players(host_player, player, shared)
+        match_message = (host_player, player, msg, match_id)
+
+    if match_message:
+        host_player, player2, msg, match_id = match_message
+        send_message(host_player["socket"], msg)
+        send_message(player2["socket"], msg)
+        print(f"Matched {host_player['client_id']} and {player2['client_id']} into {match_id} via room {code}")
+
+
 def handle_client(client_socket, client_address, shared, lock):
     client_file = client_socket.makefile("rb")
     try:
@@ -53,7 +117,7 @@ def handle_client(client_socket, client_address, shared, lock):
         send_message(client_socket, f"SESS {version} {client_id}")
         print(f"Assigned {client_id}")
 
-        # --- queue join ---
+        # --- routing ---
         message = read_message(client_file)
         if not message:
             client_socket.close()
@@ -61,14 +125,6 @@ def handle_client(client_socket, client_address, shared, lock):
         print(f"Received: {message}")
 
         parts = message.split()
-        if not (len(parts) == 2 and parts[0] == "QJOIN"):
-            send_message(client_socket, "INVL expected-qjoin")
-            client_socket.close()
-            return
-
-        send_message(client_socket, "WAIT")
-        print(f"{client_id} joined the queue")
-
         player = {
             "socket": client_socket,
             "file": client_file,
@@ -76,31 +132,15 @@ def handle_client(client_socket, client_address, shared, lock):
             "client_id": client_id,
         }
 
-        # --- matchmaking ---
-        match_message = None
-        with lock:
-            shared["waiting_players"].append(player)
-
-            if len(shared["waiting_players"]) >= 2:
-                player1 = shared["waiting_players"].pop(0)
-                player2 = shared["waiting_players"].pop(0)
-
-                match_id = create_match_id(shared["match_count"])
-                shared["match_count"] += 1
-
-                match_message = (
-                    player1,
-                    player2,
-                    f"MATCH {match_id} {GAME_SERVER_HOST} {GAME_SERVER_PORT}",
-                    match_id,
-                )
-
-        # send MATCH outside the lock so we don't hold it during network I/O
-        if match_message:
-            player1, player2, msg, match_id = match_message
-            send_message(player1["socket"], msg)
-            send_message(player2["socket"], msg)
-            print(f"Matched {player1['client_id']} and {player2['client_id']} into {match_id}")
+        if parts[0] == "QJOIN" and len(parts) == 2:
+            handle_qjoin(player, shared, lock)
+        elif parts[0] == "RCREATE" and len(parts) == 1:
+            handle_rcreate(player, shared, lock)
+        elif parts[0] == "RJOIN" and len(parts) == 2:
+            handle_rjoin(player, parts[1], shared, lock)
+        else:
+            send_message(client_socket, "INVL expected-qjoin-rcreate-rjoin")
+            client_socket.close()
 
     except Exception as e:
         print(f"Error handling {client_address}: {e}")
@@ -118,6 +158,7 @@ def main():
     # shared state accessed across threads
     shared = {
         "waiting_players": [],
+        "rooms": {},
         "player_count": 1,
         "match_count": 1,
     }
