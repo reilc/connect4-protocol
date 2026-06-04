@@ -1,7 +1,11 @@
 import socket
 import threading
+import time
 
 TURN_TIMEOUT = 45  # seconds a player has to submit a move
+
+STATS_SERVER_HOST = "127.0.0.1"
+STATS_SERVER_PORT = 4244
 
 class ConnectFour:
     def __init__(self):
@@ -105,6 +109,33 @@ def broadcast(players, message):
             print(f"Error broadcasting to {player['client_id']}: {e}")
 
 
+def report_result(match_id, p1_id, p2_id, winner_id, outcome, p1_moves, p2_moves, duration):
+    """Send the completed game result to the stats server. Failures are logged but not fatal."""
+    try:
+        stats_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        stats_socket.connect((STATS_SERVER_HOST, STATS_SERVER_PORT))
+        stats_file = stats_socket.makefile("rb")
+
+        msg = (
+            f"RESULT {match_id} {p1_id} {p2_id} {winner_id} "
+            f"{outcome} {p1_moves} {p2_moves} {duration}"
+        )
+        send_message(stats_socket, msg)
+
+        response = stats_file.readline().decode("utf-8").strip()
+        if response != "RESULT_OK":
+            print(f"[{match_id}] Stats server returned unexpected response: {response}")
+
+    except Exception as e:
+        print(f"[{match_id}] Could not report result to stats server: {e}")
+    finally:
+        try:
+            stats_file.close()
+            stats_socket.close()
+        except Exception:
+            pass
+
+
 def run_game(players):
     assert players[0]["match_id"] == players[1]["match_id"], "Match ID mismatch — players should not have been paired"
 
@@ -117,6 +148,13 @@ def run_game(players):
     print(f"[{match_id}] Starting game between {player1['client_id']} and {player2['client_id']}")
 
     broadcast(players, f"STRT {match_id} {player1['client_id']} {player2['client_id']}")
+
+    start_time = time.time()
+    move_counts = {player1["client_id"]: 0, player2["client_id"]: 0}
+
+    # result state — updated at each exit point, read in finally
+    winner_id = "DRAW"
+    outcome = "DRAW"
 
     try:
         while not game.is_game_over():
@@ -138,38 +176,65 @@ def run_game(players):
                 if not move_msg:
                     print(f"[{match_id}] {active_player['client_id']} disconnected.")
                     broadcast(players, "ERR opponent-disconnected")
+                    winner_id = None
+                    outcome = None
                     break
 
                 print(f"[{match_id}] {active_player['client_id']} chose column: {move_msg}")
                 column = int(move_msg)
 
                 game.make_move(column)
+                move_counts[active_player["client_id"]] += 1
 
             except socket.timeout:
                 active_player["socket"].settimeout(None)
                 print(f"[{match_id}] {active_player['client_id']} timed out.")
                 send_message(active_player["socket"], "OVER FORFEIT timeout")
                 send_message(waiting_player["socket"], f"OVER WIN {waiting_player['client_id']} forfeit")
+                winner_id = waiting_player["client_id"]
+                outcome = "FORFEIT"
                 return
             except ValueError as e:
                 send_message(active_player["socket"], f"INVL {str(e)}")
                 continue
             except Exception as e:
                 print(f"[{match_id}] Error handling player turn: {e}")
+                winner_id = None
+                outcome = None
                 break
 
         broadcast(players, f"BOARD {game.get_board_string()}")
-        winner = game.get_winner()
+        game_winner = game.get_winner()
 
-        if winner == 1:
+        if game_winner == 1:
+            winner_id = player1["client_id"]
+            outcome = "WIN"
             broadcast(players, f"OVER WIN {player1['client_id']}")
-        elif winner == 2:
+        elif game_winner == 2:
+            winner_id = player2["client_id"]
+            outcome = "WIN"
             broadcast(players, f"OVER WIN {player2['client_id']}")
         else:
+            winner_id = "DRAW"
+            outcome = "DRAW"
             broadcast(players, "OVER DRAW")
 
     finally:
+        duration = int(time.time() - start_time)
         print(f"[{match_id}] Game over. Closing player sockets.")
+
+        if outcome is not None:
+            report_result(
+                match_id,
+                player1["client_id"],
+                player2["client_id"],
+                winner_id,
+                outcome,
+                move_counts[player1["client_id"]],
+                move_counts[player2["client_id"]],
+                duration,
+            )
+
         for player in players:
             player["file"].close()
             player["socket"].close()
