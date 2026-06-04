@@ -401,6 +401,18 @@ Signals the start of the match. Identifies which player is Red (moves first) and
 
 ---
 
+### **MOVE**
+
+*Client → Game Server*
+
+Submits a move. Includes the match ID and client ID so the server can validate the message came from the right player in the right game.
+
+`MOVE <match-id> <client-id> <column>`
+
+Example: `MOVE M1 CID1 3`
+
+---
+
 ### **BOARD**
 
 *Game Server → All Clients*
@@ -449,8 +461,10 @@ Reason codes:
 |---|---|---|
 | `past-column-limits` | Game Server | Column number out of range |
 | `column-is-full` | Game Server | Chosen column has no empty slots |
+| `bad-move-format` | Game Server | MOVE message missing fields or wrong verb |
+| `wrong-match-id` | Game Server | Match ID in MOVE does not match the active game |
+| `wrong-client-id` | Game Server | Client ID in MOVE does not match the active player |
 | `bad-gcon` | Game Server | Malformed GCON message |
-| `wrong-match-id` | Game Server | Match ID does not match expected |
 | `unknown-room-code` | Matchmaking Server | Room code does not exist |
 | `room-host-disconnected` | Matchmaking Server | Room host left before match started |
 | `expected-helo` | Matchmaking Server | Expected HELO as first message |
@@ -544,7 +558,7 @@ Indicates the requested player has no recorded history yet.
 | `RJOIN` | Matchmaking Server |
 | `QJOIN` | Matchmaking Server |
 | `GCON` | Game Server |
-| `<column-number>` | Game Server |
+| `MOVE` | Game Server |
 | `STATS` | Statistics Server |
 
 ### **Server-Sent Messages**
@@ -606,7 +620,7 @@ Indicates the requested player has no recorded history yet.
         |<-- BOARD ************.. |-- BOARD ************.|
         |<-- YOUR_TURN 45 --------|-- WAIT_TURN -------->|
         |                         |                      |
-        |-- 3 ------------------->|                      |
+        |-- MOVE M1 CID1 3 ------>|                      |
         |                         | [Server validates]   |
         |<-- BOARD *****R******.. |-- BOARD *****R***..->|
 
