@@ -7,8 +7,8 @@ import threading
 HOST = "0.0.0.0"
 MATCHMAKING_PORT = 4242
 
+# replace with corresponding host IP address
 GAME_SERVER_HOST = "127.0.0.1"
-# GAME_SERVER_HOST = "10.18.33.24"
 GAME_SERVER_PORT = 4243
 
 
@@ -18,29 +18,23 @@ def read_message(client_file):
         return None
     return line.decode("utf-8").strip()
 
-
 def send_message(client_socket, message):
     client_socket.sendall((message + "\r\n").encode("utf-8"))
-
 
 def create_client_id(player_num):
     return f"CID{player_num}"
 
-
 def create_match_id(match_num):
     return f"M{match_num}"
 
-
 def create_room_code():
     return "".join(random.choices(string.ascii_uppercase, k=6))
-
 
 def pair_players(player1, player2, shared):
     """Assign a match ID and return the MATCH message string. Caller must hold the lock."""
     match_id = create_match_id(shared["match_count"])
     shared["match_count"] += 1
     return match_id, f"MATCH {match_id} {GAME_SERVER_HOST} {GAME_SERVER_PORT}"
-
 
 def is_socket_alive(sock):
     """Non-blocking check — safe to call inside a lock."""
@@ -51,7 +45,6 @@ def is_socket_alive(sock):
         return True
     except Exception:
         return False
-
 
 def handle_qjoin(player, shared, lock):
     send_message(player["socket"], "WAIT")
@@ -89,7 +82,6 @@ def handle_qjoin(player, shared, lock):
         send_message(player2["socket"], msg)
         print(f"Matched {player1['client_id']} and {player2['client_id']} into {match_id}")
 
-
 def handle_rcreate(player, shared, lock):
     with lock:
         code = create_room_code()
@@ -99,7 +91,6 @@ def handle_rcreate(player, shared, lock):
 
     send_message(player["socket"], f"ROOM {code}")
     print(f"{player['client_id']} created room {code}")
-
 
 def handle_rjoin(player, code, shared, lock):
     match_message = None
@@ -124,7 +115,6 @@ def handle_rjoin(player, code, shared, lock):
         send_message(host_player["socket"], msg)
         send_message(player2["socket"], msg)
         print(f"Matched {host_player['client_id']} and {player2['client_id']} into {match_id} via room {code}")
-
 
 def handle_client(client_socket, client_address, shared, lock):
     client_file = client_socket.makefile("rb")
@@ -182,7 +172,6 @@ def handle_client(client_socket, client_address, shared, lock):
         print(f"Error handling {client_address}: {e}")
         client_socket.close()
 
-
 def main():
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -213,7 +202,6 @@ def main():
     finally:
         print("Shutting down matchmaking server.")
         server_socket.close()
-
 
 if __name__ == "__main__":
     main()

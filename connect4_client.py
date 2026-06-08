@@ -1,11 +1,15 @@
 import json
 import socket
 
+# For network play, update each HOST constant to the IP of the machine
+# running that server. All players must use the same IP for each server.
+
+# replace with corresponding host IP address
 MATCHMAKING_HOST = "127.0.0.1"
-# MATCHMAKING_HOST = "10.18.33.24"
 MATCHMAKING_PORT = 4242
 PROTOCOL_VERSION = "1"
 
+# replace with corresponding host IP address
 STATS_SERVER_HOST = "127.0.0.1"
 STATS_SERVER_PORT = 4244
 
@@ -13,31 +17,20 @@ BOARD_ROWS = 6
 BOARD_COLS = 7
 
 
-# ---------------------------------------------------------------------------
-# networking
-# ---------------------------------------------------------------------------
-
 def read_message(server_file):
     line = server_file.readline()
     if not line:
         return None
     return line.decode("utf-8").strip()
 
-
 def send_message(server_socket, message):
     server_socket.sendall((message + "\r\n").encode("utf-8"))
-
-
-# ---------------------------------------------------------------------------
-# display
-# ---------------------------------------------------------------------------
 
 def print_instructions():
     print("\nHow to play:")
     print("  - You are RED (R) if you are Player 1, YELLOW (Y) if you are Player 2")
     print("  - Players take turns dropping a piece into a column (1-7)")
     print("  - First to get 4 in a row — horizontally, vertically, or diagonally — wins\n")
-
 
 def render_board(board_string):
     print("\n  1 2 3 4 5 6 7")
@@ -49,7 +42,6 @@ def render_board(board_string):
             line += spot + "|"
         print(line)
     print(" +-+-+-+-+-+-+-+\n")
-
 
 def fetch_and_display_stats(client_id):
     try:
@@ -99,17 +91,11 @@ def fetch_and_display_stats(client_id):
     except Exception as e:
         print(f"\nCould not retrieve stats: {e}\n")
 
-
-# ---------------------------------------------------------------------------
-# lobby
-# ---------------------------------------------------------------------------
-
 def print_lobby_menu():
     print("\n--- Connect 4 Lobby ---")
     print("  1. Random matchmaking")
     print("  2. Create a private room")
     print("  3. Join a private room")
-
 
 def get_lobby_choice():
     while True:
@@ -118,11 +104,6 @@ def get_lobby_choice():
         if choice in ("1", "2", "3"):
             return choice
         print("Invalid choice. Please enter 1, 2, or 3.")
-
-
-# ---------------------------------------------------------------------------
-# matchmaking
-# ---------------------------------------------------------------------------
 
 def handshake(matchmaking_socket, matchmaking_file, existing_client_id=None):
     if existing_client_id:
@@ -142,7 +123,6 @@ def handshake(matchmaking_socket, matchmaking_file, existing_client_id=None):
     print(f"Connected. You are {client_id}")
     return client_id
 
-
 def wait_for_match(matchmaking_file):
     print("Waiting for opponent...")
     while True:
@@ -159,11 +139,9 @@ def wait_for_match(matchmaking_file):
         if parts[0] == "INVL":
             raise ValueError(f"Matchmaking error: {msg}")
 
-
 def connect_random(matchmaking_socket, matchmaking_file):
     send_message(matchmaking_socket, "QJOIN")
     return wait_for_match(matchmaking_file)
-
 
 def connect_create_room(matchmaking_socket, matchmaking_file):
     send_message(matchmaking_socket, "RCREATE")
@@ -179,7 +157,6 @@ def connect_create_room(matchmaking_socket, matchmaking_file):
     print(f"\nYour room code is: {room_code}")
     print("Share this code with your friend and wait for them to join...\n")
     return wait_for_match(matchmaking_file)
-
 
 def connect_join_room(matchmaking_socket, matchmaking_file):
     while True:
@@ -212,7 +189,6 @@ def connect_join_room(matchmaking_socket, matchmaking_file):
         else:
             raise ValueError(f"Unexpected message: {msg}")
 
-
 def connect_to_matchmaking(existing_client_id=None):
     matchmaking_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     matchmaking_socket.connect((MATCHMAKING_HOST, MATCHMAKING_PORT))
@@ -235,11 +211,6 @@ def connect_to_matchmaking(existing_client_id=None):
 
     return client_id, match_id, host, port
 
-
-# ---------------------------------------------------------------------------
-# gameplay
-# ---------------------------------------------------------------------------
-
 def get_move(match_id, client_id):
     while True:
         raw = input("Choose a column (1-7): ").strip()
@@ -251,7 +222,6 @@ def get_move(match_id, client_id):
             print("Column must be between 1 and 7.")
             continue
         return f"MOVE {match_id} {client_id} {col}"
-
 
 def play_game(client_id, match_id, game_server_host, game_server_port):
     game_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -317,11 +287,6 @@ def play_game(client_id, match_id, game_server_host, game_server_port):
         game_file.close()
         game_socket.close()
 
-
-# ---------------------------------------------------------------------------
-# entry point
-# ---------------------------------------------------------------------------
-
 def main():
     print("Welcome to Connect 4!")
     client_id = None
@@ -339,7 +304,6 @@ def main():
         except Exception as e:
             print(f"Error: {e}")
             break
-
 
 if __name__ == "__main__":
     main()

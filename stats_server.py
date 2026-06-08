@@ -10,24 +10,15 @@ STATS_FILE = "stats.json"
 STATS_ARCHIVE_DIR = "stats_archive"
 
 
-# ---------------------------------------------------------------------------
-# networking
-# ---------------------------------------------------------------------------
-
 def read_message(client_file):
     line = client_file.readline()
     if not line:
         return None
     return line.decode("utf-8").strip()
 
-
 def send_message(client_socket, message):
     client_socket.sendall((message + "\r\n").encode("utf-8"))
 
-
-# ---------------------------------------------------------------------------
-# JSON file helpers
-# ---------------------------------------------------------------------------
 
 def load_stats(lock):
     """Read the stats file. Returns an empty dict if the file doesn't exist yet."""
@@ -57,11 +48,6 @@ def get_or_create_player(data, client_id):
             "matches": []
         }
     return data[client_id]
-
-
-# ---------------------------------------------------------------------------
-# message handlers
-# ---------------------------------------------------------------------------
 
 def handle_result(parts, file_lock):
     """
@@ -116,7 +102,6 @@ def handle_result(parts, file_lock):
     print(f"Saved result for match {match_id}: {p1_id} vs {p2_id} — {outcome}")
     return True
 
-
 def handle_stats(client_socket, parts, file_lock):
     """
     STATS <client_id>
@@ -136,11 +121,6 @@ def handle_stats(client_socket, parts, file_lock):
     payload = json.dumps(data[client_id])
     send_message(client_socket, f"STATS_OK {payload}")
     print(f"Sent stats for {client_id}")
-
-
-# ---------------------------------------------------------------------------
-# connection handler
-# ---------------------------------------------------------------------------
 
 def handle_connection(client_socket, client_address, file_lock):
     client_file = client_socket.makefile("rb")
@@ -173,11 +153,6 @@ def handle_connection(client_socket, client_address, file_lock):
         client_file.close()
         client_socket.close()
 
-
-# ---------------------------------------------------------------------------
-# startup
-# ---------------------------------------------------------------------------
-
 def archive_stats():
     """If a stats file exists from a previous session, move it to the archive folder."""
     if not os.path.exists(STATS_FILE):
@@ -188,11 +163,6 @@ def archive_stats():
     archive_path = os.path.join(STATS_ARCHIVE_DIR, f"stats_{timestamp}.json")
     os.rename(STATS_FILE, archive_path)
     print(f"Archived previous stats to: {archive_path}")
-
-
-# ---------------------------------------------------------------------------
-# main
-# ---------------------------------------------------------------------------
 
 def main():
     archive_stats()
@@ -221,7 +191,6 @@ def main():
     finally:
         print("Shutting down stats server.")
         server_socket.close()
-
 
 if __name__ == "__main__":
     main()

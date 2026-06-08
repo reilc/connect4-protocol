@@ -2,8 +2,9 @@ import socket
 import threading
 import time
 
-TURN_TIMEOUT = 45  # seconds a player has to submit a move
+TURN_TIMEOUT = 45
 
+# replace with corresponding host IP address
 STATS_SERVER_HOST = "127.0.0.1"
 STATS_SERVER_PORT = 4244
 
@@ -90,13 +91,11 @@ class ConnectFour:
 
         return result
 
-
 def read_message(client_file):
     line = client_file.readline()
     if not line:
         return None
     return line.decode('utf-8').strip()
-
 
 def send_message(client_socket, message):
     client_socket.sendall((message + "\r\n").encode('utf-8'))
@@ -107,7 +106,6 @@ def broadcast(players, message):
             send_message(player["socket"], message)
         except Exception as e:
             print(f"Error broadcasting to {player['client_id']}: {e}")
-
 
 def report_result(match_id, p1_id, p2_id, winner_id, outcome, p1_moves, p2_moves, duration):
     """Send the completed game result to the stats server. Failures are logged but not fatal."""
@@ -135,7 +133,6 @@ def report_result(match_id, p1_id, p2_id, winner_id, outcome, p1_moves, p2_moves
         except Exception:
             pass
 
-
 def run_game(players):
     assert players[0]["match_id"] == players[1]["match_id"], "Match ID mismatch — players should not have been paired"
 
@@ -152,7 +149,6 @@ def run_game(players):
     start_time = time.time()
     move_counts = {player1["client_id"]: 0, player2["client_id"]: 0}
 
-    # result state — updated at each exit point, read in finally
     winner_id = "DRAW"
     outcome = "DRAW"
 
@@ -256,7 +252,6 @@ def run_game(players):
             player["file"].close()
             player["socket"].close()
 
-
 def main():
     host = '0.0.0.0'
     port = 4243
@@ -321,7 +316,6 @@ def main():
     finally:
         print("Shutting down game server.")
         server_socket.close()
-
 
 if __name__ == "__main__":
     main()

@@ -38,7 +38,10 @@ This document is not a product of the Internet Engineering Task Force (IETF) and
 6. Message Reference  
 7. Communication Scenarios  
 8. Error and Failure Handling  
-9. References
+9. Running the Servers  
+   * Local Setup (Single Machine)  
+   * Network Setup (Multiple Machines)  
+10. References
 
 ---
 
@@ -68,22 +71,7 @@ The game ends as soon as one player achieves four discs in a row — horizontall
 
 ## **System Architecture Overview**
 
-    +-------------------------------------------------+
-    |               Matchmaking Server                |
-    +-------------------------------------------------+
-            /                                  \
-    Matchmaking Request                Paired match handed
-          /                               to game server
-         /                                       \
-    +------------------+                   +------------------+     Game results
-    |    Game Lobby    |                   |    Game Server   |------------------>
-    | (Player Client)  |                   |                  |   +---------------+
-    +------------------+                   +------------------+   | Stats Server  |
-            \                                  /                   +---------------+
-           Redirected                         /
-          to find opp                       /
-               \                         /
-                +-----------------------+
+![System Architecture](architecture.png)
 
 The system follows a sequential lifecycle: players interact with the Game Lobby, which communicates with the Matchmaking Server to find opponents via random queue or room code. Once matched, the Matchmaking Server hands the connection off to a Game Server, which acts as the sole referee for the match. When the game concludes, the Game Server pushes results to the Statistics Server. After stats are displayed, the client is automatically returned to the lobby.
 
@@ -681,6 +669,67 @@ Detected via an empty read on the socket. The game is ended and `ERR opponent-di
 ### **Dead Socket in Matchmaking Queue or Room**
 
 Detected at the point of pairing using a non-blocking socket check. Dead players are silently removed from the queue or room. Surviving queue players are re-queued; surviving room joiners receive `INVL room-host-disconnected`.
+
+---
+
+## **Running the Servers**
+
+### **Local Setup (Single Machine)**
+
+All four components run on the same machine. No configuration changes are needed — all host constants default to `127.0.0.1`. Start each component in its own terminal in this order:
+
+**Terminal 1 — Stats Server:**
+```
+python stats_server.py
+```
+
+**Terminal 2 — Game Server:**
+```
+python game_server.py
+```
+
+**Terminal 3 — Matchmaking Server:**
+```
+python matchmaking_server.py
+```
+
+**Terminal 4 and 5 (and so on...) — Clients (one per player):**
+```
+python connect4_client.py
+```
+
+The servers must be started before the clients connect. The stats server and game server must be running before the matchmaking server, since the game server reports results to the stats server and the matchmaking server forwards clients to the game server.
+
+---
+
+### **Network Setup (Multiple Machines)**
+
+Each server can run on a different machine as long as all machines are on the same local network. The person running each server shares their local IP address with everyone else. To find a machine's local IP:
+
+* **Mac/Linux:** run `ifconfig` and look for an address starting with `192.168.x.x` or `10.x.x.x`
+* **Windows:** run `ipconfig` and look for the same
+
+**Configuration changes needed before running:**
+
+In `matchmaking_server.py`, set `GAME_SERVER_HOST` to the IP of the machine running the game server:
+```
+GAME_SERVER_HOST = "192.168.x.x"  # IP of the game server machine
+```
+
+In `game_server.py`, set `STATS_SERVER_HOST` to the IP of the machine running the stats server:
+```
+STATS_SERVER_HOST = "192.168.x.x"  # IP of the stats server machine
+```
+
+In `connect4_client.py`, set both host constants to the IPs of the machines running those servers:
+```
+MATCHMAKING_HOST = "192.168.x.x"  # IP of the matchmaking server machine
+STATS_SERVER_HOST = "192.168.x.x"  # IP of the stats server machine
+```
+
+The servers themselves (`HOST = "0.0.0.0"`) do not need any changes — they already listen on all available network interfaces.
+
+Start the servers in the same order as the local setup. All players must update their client with the correct IP addresses before connecting.
 
 ---
 
